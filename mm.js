@@ -56,6 +56,12 @@ const hashrate_regexes = [
   [1,       2, /([\d\.]+) G\/s/],                                            // gminer
   [1000000, 2, /([\d\.]+) MH\/s/],                                           // gminer
 ];
+const error_regexes = [
+  /(out of memory)/,                                           // for new xmrig CUDA crash
+  /(unknown) error/,                                           // for new xmrig CUDA crash
+  /(Setup failed.*)/,                                          // for new xmrig init fail
+  /.CUDA. Error/,                                              // for new xmrig CUDA crash
+];
 
 function algo_hashrate_factor(algo) {
   switch (algo) {
@@ -479,7 +485,7 @@ function start_miner(cmd, out_cb) {
    let exe = args.shift();
    return start_miner_raw(exe, args, out_cb);
 }
- 
+
 // *** Pool socket processing
 
 function connect_pool(pool_num, pool_ok_cb, pool_new_msg_cb, pool_err_cb) {
@@ -501,7 +507,7 @@ function connect_pool(pool_num, pool_ok_cb, pool_new_msg_cb, pool_err_cb) {
     }) + "\n");
   });
 
-  let is_pool_ok = false; 
+  let is_pool_ok = false;
   let pool_data_buff = "";
 
   pool_socket.on('data', function (msg) {
@@ -533,7 +539,7 @@ function connect_pool(pool_num, pool_ok_cb, pool_new_msg_cb, pool_err_cb) {
       } else err("Ignoring pool (" + c.pools[pool_num] + ") message since pool not reported no errors yet: " + JSON.stringify(json));
     }
     pool_data_buff = incomplete_line;
-    
+
   });
 
   pool_socket.on('end', function() {
@@ -550,7 +556,7 @@ function connect_pool(pool_num, pool_ok_cb, pool_new_msg_cb, pool_err_cb) {
     pool_err_cb(pool_num);
   });
 }
-           
+
 // *** connect_pool function callbacks
 
 function set_main_pool_check_timer() {
@@ -784,7 +790,7 @@ function do_miner_perf_runs(cb) {
   let miner_perf_runs = [];
   for (let algo of bench_algos) {
     if (c.algo_perf[algo] || !(algo in c.algos)) continue;
-    miner_perf_runs.push(function(resolve) {
+    let perfCheck = function(resolve) {
       log("Checking miner performance for " + algo + " algo");
       const cmd = c.algos[algo];
       let miner_proc = null;
@@ -906,12 +912,27 @@ function do_miner_perf_runs(cb) {
             }
           }
         }
+        for (let i in error_regexes) {
+          const error_regex = error_regexes[i];
+          const m = str.match(error_regex);
+          if (m) {
+            const error = m[1];
+            log("Retrying due to error: " + error);
+            miner_proc.on('close', (code) => { clearTimeout(timeout); resolve(); });
+            miner_perf_runs.unshift(perfCheck);
+            tree_kill(miner_proc.pid);
+            break;
+          }
+        }
       });
-    });
+    }
+    miner_perf_runs.push(perfCheck);
   }
 
   function next_miner_perf_run() {
-    if (miner_perf_runs.length === 0) return cb();
+    if (miner_perf_runs.length === 0){
+      return cb();
+    }
     const miner_perf_run = miner_perf_runs.shift();
     miner_perf_run(next_miner_perf_run);
   }
