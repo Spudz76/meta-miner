@@ -217,6 +217,9 @@ let last_miner_hashrate   = null;
 let is_want_miner_kill    = false; // true if we want to kill miner (otherwise it is restart if closed without a reason)
 let curr_algo             = null;
 let last_algo_change_time = null;
+let socket_fails        = 0;
+let socket_fail_max     = 5;
+let socket_fail_timer   = null;
 
 let main_pool_check_timer  = null;
 let miner_proc             = null;
@@ -435,16 +438,24 @@ let miner_server = net.createServer(function (miner_socket) {
     }
     miner_data_buff = incomplete_line;
   });
+  let sockFailExpire = function() {
+    if(socket_fails-- < 0) socket_fails=0;
+  };
+  let sockFail = function(s,r) {
+    socket_fails++;
+    if (curr_pool_socket && curr_miner_socket) err("Pool (" + c.pools[curr_pool_num] + ") <-> miner link was broken due to miner socket "+r+" (fail "+socket_fails+"/"+socket_fail_max+")");
+    s.destroy();
+    set_curr_miner(null);
+    socket_fail_timer = setTimeout(sockFailExpire, 20*1000);
+    if(socket_fails >= socket_fail_max) process.exit(-69);
+  };
   miner_socket.on('end', function() {
     if (is_verbose_mode) log("Miner socket was closed");
-    if (curr_pool_socket && curr_miner_socket) err("Pool (" + c.pools[curr_pool_num] + ") <-> miner link was broken due to closed miner socket");
-    set_curr_miner(null);
+    sockFail(miner_socket,'closed');
   });
   miner_socket.on('error', function() {
     err("Miner socket error");
-    if (curr_pool_socket && curr_miner_socket) err("Pool (" + c.pools[curr_pool_num] + ") <-> miner link was broken due to miner socket error");
-    miner_socket.destroy();
-    set_curr_miner(null);
+    sockFail(miner_socket,'error');
   });
 });
 
